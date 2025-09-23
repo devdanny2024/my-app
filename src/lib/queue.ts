@@ -1,6 +1,12 @@
-import { Queue } from "bullmq";
-import IORedis from "ioredis";
+// src/lib/queue.ts
 
-const connection = new IORedis(process.env.REDIS_URL || "");
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
 
-export const mailQueue = new Queue("mail-queue", { connection });
+// This connection will be used by all parts of your app
+const connection = new IORedis(process.env.UPSTASH_REDIS_URL!, {
+  maxRetriesPerRequest: null, // Recommended for serverless environments
+});
+
+// Export a single instance of the queue
+export const mailQueue = new Queue('mail-queue', { connection });
