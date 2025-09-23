@@ -1,17 +1,21 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Queue } from 'bullmq';
-import { sendMail } from '../lib/mailer'; // Corrected import path
+import { sendMail } from '../lib/mailer';
 
 const connection = {
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 };
 
-const queueName = 'mail-queue';
-const mailQueue = new Queue(queueName, { connection });
+const mailQueue = new Queue('mail-queue', { connection });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
+
+  // Optional: authorize cron job
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).end('Unauthorized');
+  }
 
   try {
     const jobs = await mailQueue.getJobs(['waiting'], 0, 10);
@@ -23,10 +27,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       try {
         await sendMail({ to: email, subject, html });
-
         if (!job.token) throw new Error('Job token missing');
         await job.moveToCompleted('done', job.token);
-
         sentCount++;
       } catch (err) {
         if (!job.token) throw new Error('Job token missing');
