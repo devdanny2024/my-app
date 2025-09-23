@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",  // <-- override this
+    "target": "ES2020",
+    "outDir": "dist-worker",
+    "noEmit": false,
+    "esModuleInterop": true
+  },
+  "include": ["src/worker/**/*", "src/lib/**/*"]
+}
