@@ -110,21 +110,25 @@ export default function CampaignsPage({
     }
   }
 
-  async function handleSend(campaignId: number) {
-    try {
-      const res = await fetch("/api/campaigns/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId }),
-      });
-      if (!res.ok) throw new Error("Send failed");
-      addToast?.("Campaign sending started!", "success");
-      fetchCampaigns();
-    } catch (err) {
-      console.error(err);
-      addToast?.("Failed to send campaign", "error");
-    }
+async function handleSend(campaignId: number) {
+  try {
+    const res = await fetch('/api/campaigns/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId }),
+    });
+    const json = await res.json();
+
+    if (!res.ok) throw new Error(json.error || 'Send failed');
+
+    addToast?.(`Sent ${json.sent} emails!`, 'success');
+    fetchCampaigns(); // refresh campaign list
+  } catch (err) {
+    console.error(err);
+    addToast?.('Failed to send campaign', 'error');
   }
+}
+
 
   return (
     <div className="space-y-6 lg:space-y-8">
