@@ -1,0 +1,37 @@
+datasource db {
+  provider = "sqlite" // Change later to postgresql or mysql
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Subscriber {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  campaigns Campaign[] @relation("CampaignSubscribers")
+}
+
+model Template {
+  id        Int      @id @default(autoincrement())
+  name      String
+  subject   String
+  body      String
+  createdAt DateTime @default(now())
+  campaigns Campaign[]
+}
+
+model Campaign {
+  id           Int          @id @default(autoincrement())
+  name         String
+  subject      String
+  body         String
+  status       String       @default("draft") // draft, scheduled, sent
+  createdAt    DateTime     @default(now())
+  subscribers  Subscriber[] @relation("CampaignSubscribers")
+  templateId   Int?
+  template     Template?    @relation(fields: [templateId], references: [id])
+}
