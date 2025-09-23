@@ -151,78 +151,37 @@ export default function CampaignsPage({
     }
   }
 
-  // Fixed send function
-  async function handleSend(campaignId: number) {
-    if (sendingCampaigns[campaignId]) return;
+// In your CampaignsPage component
 
-    setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
-    setShowQueuePopup(campaignId);
+async function handleSend(campaignId: number) {
+  if (sendingCampaigns[campaignId]) return;
 
-    try {
-      // Step 1: Queue the emails
-      const queueRes = await fetch('/api/campaigns/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ campaignId }),
-      });
-      
-      const queueResult = await queueRes.json();
-      
-      if (!queueRes.ok) {
-        throw new Error(queueResult.error || 'Failed to queue emails');
-      }
+  setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
+  setShowQueuePopup(campaignId);
 
-      addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
+  try {
+    const queueRes = await fetch('/api/campaigns/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId }),
+    });
 
-      // Step 2: Process the queue in batches
-      let totalSent = 0;
-      let isComplete = false;
-
-      const processQueue = async () => {
-        try {
-          const workerRes = await fetch('/api/queue/worker', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ campaignId, batchSize: 5 }), // Process 5 at a time
-          });
-          
-          const workerResult = await workerRes.json();
-          
-          if (workerRes.ok) {
-            totalSent += workerResult.sent || 0;
-            isComplete = workerResult.completed || false;
-
-            if (workerResult.sent > 0) {
-              console.log(`Sent ${workerResult.sent} emails, total: ${totalSent}`);
-            }
-
-            // Continue processing if not complete and there are still emails to send
-            if (!isComplete && workerResult.sent > 0) {
-              setTimeout(processQueue, 2000); // Wait 2 seconds between batches
-            } else if (isComplete) {
-              addToast?.(`Campaign completed! Sent ${totalSent} emails total`, 'success');
-              await fetchCampaigns(); // Refresh campaign status
-              setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
-            } else {
-              // No more emails to send
-              setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
-            }
-          }
-        } catch (err) {
-          console.error('Queue processing error:', err);
-          setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
-        }
-      };
-
-      // Start processing the queue
-      setTimeout(processQueue, 1000); // Give queue a moment to populate
-
-    } catch (err) {
-      console.error('Send campaign error:', err);
-      addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
-      setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+    const queueResult = await queueRes.json();
+    
+    if (!queueRes.ok) {
+      throw new Error(queueResult.error || 'Failed to queue emails');
     }
+
+    addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
+    await fetchCampaigns(); // Refresh campaigns to show 'sending' status
+
+  } catch (err) {
+    console.error('Send campaign error:', err);
+    addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
+    setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+    setShowQueuePopup(null);
   }
+}
 
   const handleClosePopup = () => {
     setShowQueuePopup(null);

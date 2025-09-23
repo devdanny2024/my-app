@@ -1,90 +1,69 @@
-// src/pages/api/queue/worker.ts - Process jobs from the queue
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { Queue, Worker } from 'bullmq';
-import { sendMail } from '../../../lib/mailer';
-import { supabase } from '../../../lib/supabase';
+// src/pages/api/queue/worker.ts
 
-const connection = {
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-};
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
+import { sendMail } from '../../../lib/mailer'; // Your email sending function
+import { supabase } from '../../../lib/supabase'; // Your supabase client
+
+// IMPORTANT: Use IORedis for the worker API route, not the REST connection
+const connection = new IORedis(process.env.UPSTASH_REDIS_URL!, {
+  maxRetriesPerRequest: null,
+});
 
 const mailQueue = new Queue('mail-queue', { connection });
 
-// This endpoint processes a batch of jobs manually
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
-
-  const { campaignId, batchSize = 10 } = req.body;
-  if (!campaignId) return res.status(400).json({ error: 'Missing campaignId' });
-
-  try {
-    // Get waiting jobs for this campaign
-    const jobs = await mailQueue.getJobs(['waiting'], 0, batchSize);
-    const campaignJobs = jobs.filter(job => job.data.campaignId === campaignId);
-
-    if (campaignJobs.length === 0) {
-      // Check if campaign is complete
-      const allJobs = await mailQueue.getJobs(['waiting', 'active'], 0, 1000);
-      const remainingCampaignJobs = allJobs.filter(job => job.data.campaignId === campaignId);
-      
-      if (remainingCampaignJobs.length === 0) {
-        // Mark campaign as sent
-        await supabase
-          .from('campaigns')
-          .update({ status: 'sent' })
-          .eq('id', campaignId);
-      }
-      
-      return res.json({ sent: 0, completed: remainingCampaignJobs.length === 0 });
-    }
-
-    let sentCount = 0;
-    let failedCount = 0;
-
-    for (const job of campaignJobs) {
-      const { email, subject, html, subscriberName } = job.data;
-      if (!email || !subject || !html) continue;
-
-      try {
-        // Send email
-        await sendMail({ 
-          to: email, 
-          subject, 
-          html: html.replace(/\{\{name\}\}/g, subscriberName || 'Subscriber')
-        });
-
-        // Mark as sent in database using subscriberId from job data
-        if (job.data.subscriberId) {
-          await supabase
-            .from('campaign_subscribers')
-            .update({ sent: true, sent_at: new Date().toISOString() })
-            .eq('campaign_id', campaignId)
-            .eq('subscriber_id', job.data.subscriberId);
-        }
-
-        await job.remove();
-        sentCount++;
-        
-        console.log(`Sent email to ${email} for campaign ${campaignId}`);
-        
-      } catch (err) {
-        console.error(`Failed to send email to ${email}:`, err);
-        
-        // Move job to failed with proper BullMQ API
-        await job.moveToFailed(err instanceof Error ? err : new Error(String(err)), '0', false);
-        failedCount++;
-      }
-    }
-
-    return res.json({ 
-      sent: sentCount, 
-      failed: failedCount,
-      remaining: campaignJobs.length - sentCount - failedCount
-    });
-
-  } catch (err) {
-    console.error('Worker processing error:', err);
-    return res.status(500).json({ error: (err as Error).message });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  // 1. Check for the secret to ensure only Vercel can run this
+  const authHeader = req.headers['authorization'];
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ message: 'Unauthorized' });
   }
+
+  // 2. Fetch a batch of waiting jobs
+  const jobs = await mailQueue.getJobs(['waiting'], 0, 9); // Process 10 at a time
+
+  if (jobs.length === 0) {
+    return res.status(200).json({ message: 'No jobs to process.' });
+  }
+
+  console.log(`Processing ${jobs.length} jobs...`);
+  let sentCount = 0;
+
+  // 3. Process each job
+  for (const job of jobs) {
+    try {
+      const { campaignId, subscriberId, email, subject, html, subscriberName } = job.data;
+      
+      // Send the email
+      await sendMail({
+        to: email,
+        subject,
+        html: html.replace(/\{\{name\}\}/g, subscriberName || 'Subscriber'),
+      });
+      
+      // Update the database
+      if (subscriberId) {
+        await supabase
+          .from('campaign_subscribers')
+          .update({ sent: true, sent_at: new Date().toISOString() })
+          .eq('campaign_id', campaignId)
+          .eq('subscriber_id', subscriberId);
+      }
+
+      // Move job to 'completed' state in BullMQ instead of removing
+      await job.moveToCompleted('sent successfully', job.token!, false);
+      sentCount++;
+
+    } catch (error) {
+      console.error(`Job ${job.id} failed with error:`, error);
+      await job.moveToFailed(error as Error, job.token!);
+    }
+  }
+
+  console.log(`Processed ${sentCount} jobs successfully.`);
+  return res.status(200).json({ sent: sentCount });
 }

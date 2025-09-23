@@ -1,4 +1,4 @@
-// src/pages/api/campaigns/send.ts
+// src/pages/api/campaigns/send.ts - Corrected
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Queue } from 'bullmq';
 import { supabase } from '../../../lib/supabase';
@@ -17,7 +17,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!campaignId) return res.status(400).json({ error: 'Missing campaignId' });
 
   try {
-    // First, check if campaign exists and get its details
+    console.log(`=== DEBUG: Starting send process for campaign ${campaignId} ===`);
+
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .select('*, template:templates(*)')
@@ -28,31 +29,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    // Get all subscribers for this campaign who haven't been sent to yet
-    const { data: campaignSubscribers, error: subsError } = await supabase
+    // FIX 1 & 2: Remove the generic from rpc() and cast the resulting data instead.
+    const { data } = await supabase
+      .rpc('get_table_columns', { table_name: 'campaign_subscribers' })
+      .single();
+    const tableInfo = data as { columns: string[] } | null;
+    const hasSentColumn = tableInfo?.columns?.includes('sent');
+    
+    console.log('Table has sent column:', hasSentColumn);
+
+    let query = supabase
       .from('campaign_subscribers')
       .select(`
         subscriber_id,
         sent,
         subscribers!inner(email, name)
       `)
-      .eq('campaign_id', campaignId)
-      .eq('sent', false); // assuming you have a 'sent' column
+      .eq('campaign_id', campaignId);
+
+    if (hasSentColumn) {
+      query = query.eq('sent', false);
+    }
+
+    let { data: campaignSubscribers, error: subsError } = await query;
 
     if (subsError) {
       console.error('Error fetching subscribers:', subsError);
-      return res.status(500).json({ error: 'Failed to fetch subscribers' });
+      
+      console.log('Trying fallback query without sent filter...');
+      const { data: fallbackSubs, error: fallbackError } = await supabase
+        .from('campaign_subscribers')
+        .select(`
+          subscriber_id,
+          subscribers!inner(email, name)
+        `)
+        .eq('campaign_id', campaignId);
+      
+      if (fallbackError) {
+        return res.status(500).json({ error: 'Failed to fetch subscribers', details: fallbackError });
+      }
+      
+      // FIX 3: Add the missing 'sent' property to the fallback data to match the expected type.
+      if (fallbackSubs) {
+        campaignSubscribers = fallbackSubs.map(sub => ({
+          ...sub,
+          sent: false, // Add default 'sent' property
+        }));
+      }
     }
 
     if (!campaignSubscribers || campaignSubscribers.length === 0) {
-      return res.status(200).json({ sent: 0, message: 'No subscribers to send to' });
+      return res.status(200).json({ 
+        sent: 0, 
+        message: 'No subscribers to send to',
+      });
     }
 
-    // Create jobs in the queue for each subscriber
+    console.log(`Found ${campaignSubscribers.length} subscribers to send to`);
+
     const jobs = [];
     for (const sub of campaignSubscribers) {
       const subscriber = (sub as any).subscribers;
-      if (!subscriber?.email) continue;
+      if (!subscriber?.email) {
+        console.log('Skipping subscriber - no email:', sub);
+        continue;
+      }
       
       jobs.push({
         name: `email-${campaignId}-${subscriber.email}`,
@@ -67,25 +108,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Add jobs to queue
-    await mailQueue.addBulk(jobs);
+    if (jobs.length === 0) {
+      return res.status(200).json({ 
+        sent: 0, 
+        message: 'No valid email addresses found',
+        debug: { subscribersFound: campaignSubscribers.length }
+      });
+    }
 
-    // Update campaign status to 'sending'
+    const addedJobs = await mailQueue.addBulk(jobs);
+
     await supabase
       .from('campaigns')
       .update({ status: 'sending' })
       .eq('id', campaignId);
 
-    console.log(`Added ${jobs.length} jobs to queue for campaign ${campaignId}`);
+    console.log(`Successfully queued ${jobs.length} emails for campaign ${campaignId}`);
     
     return res.status(200).json({ 
       success: true, 
-      queued: jobs.length,
-      message: `Queued ${jobs.length} emails for sending` 
+      queued: addedJobs.length,
+      message: `Queued ${addedJobs.length} emails for sending`,
     });
 
   } catch (err) {
     console.error('Send campaign error:', err);
-    return res.status(500).json({ error: (err as Error).message });
+    return res.status(500).json({ 
+      error: (err as Error).message,
+      stack: (err as Error).stack 
+    });
   }
 }
