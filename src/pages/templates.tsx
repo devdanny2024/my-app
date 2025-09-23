@@ -1,3 +1,4 @@
+// src/pages/templates.tsx - Responsive version
 import React, { useEffect, useState } from "react";
 
 type Template = { id: number; name: string; subject: string; body: string };

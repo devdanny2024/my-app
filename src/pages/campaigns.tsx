@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import QueuePopup from "../components/QueuePopup"; // Import the new popup
 
 type Template = { id: number; name: string; subject: string; body: string };
 
@@ -19,21 +20,6 @@ type QueueCounts = {
   failed: number;
 };
 
-// Queue Progress Popup Component
-function QueuePopup({ queueCounts }: { queueCounts: QueueCounts }) {
-  return (
-    <div className="fixed bottom-4 right-4 bg-white p-4 shadow-lg rounded-xl border border-gray-200 w-64 z-50">
-      <h4 className="font-semibold mb-2">Queue Progress</h4>
-      <div className="text-sm text-gray-700">
-        <p>Waiting: {queueCounts.waiting}</p>
-        <p>Active: {queueCounts.active}</p>
-        <p>Completed: {queueCounts.completed}</p>
-        <p>Failed: {queueCounts.failed}</p>
-      </div>
-    </div>
-  );
-}
-
 export default function CampaignsPage({
   addToast,
 }: {
@@ -46,7 +32,50 @@ export default function CampaignsPage({
   const [body, setBody] = useState("");
   const [templateId, setTemplateId] = useState<number | null>(null);
   const [queueStatus, setQueueStatus] = useState<Record<string, QueueCounts>>({});
-  const [sendingCampaignId, setSendingCampaignId] = useState<number | null>(null);
+  const [sendingCampaigns, setSendingCampaigns] = useState<Record<number, boolean>>({});
+  // State persistence for popup across page refreshes
+  const [showQueuePopup, setShowQueuePopup] = useState<number | null>(() => {
+    if (typeof window !== 'undefined') {
+      const savedPopup = localStorage.getItem('showQueuePopup');
+      return savedPopup ? parseInt(savedPopup) : null;
+    }
+    return null;
+  });
+
+  // Save popup state to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (showQueuePopup !== null) {
+        localStorage.setItem('showQueuePopup', showQueuePopup.toString());
+      } else {
+        localStorage.removeItem('showQueuePopup');
+      }
+    }
+  }, [showQueuePopup]);
+
+  // Check if there are any active sending campaigns on mount
+  useEffect(() => {
+    const activeCampaigns = Object.entries(queueStatus).filter(([campaignId, status]) => 
+      status.waiting > 0 || status.active > 0
+    );
+    
+    // Auto-show popup for the first active campaign if none is currently shown
+    if (activeCampaigns.length > 0 && showQueuePopup === null) {
+      const firstActiveCampaignId = parseInt(activeCampaigns[0][0]);
+      setShowQueuePopup(firstActiveCampaignId);
+    }
+    
+    // Hide popup if the campaign is complete
+    if (showQueuePopup !== null) {
+      const currentStatus = queueStatus[showQueuePopup];
+      if (currentStatus && currentStatus.waiting === 0 && currentStatus.active === 0) {
+        // Keep popup for 5 seconds after completion then auto-hide
+        setTimeout(() => {
+          setShowQueuePopup(null);
+        }, 5000);
+      }
+    }
+  }, [queueStatus, showQueuePopup]);
 
   // Fetch templates
   async function fetchTemplates() {
@@ -72,7 +101,7 @@ export default function CampaignsPage({
     }
   }
 
-  // Poll queue status every 5 seconds
+  // Poll queue status every 3 seconds
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -82,7 +111,7 @@ export default function CampaignsPage({
       } catch (err) {
         console.error("Failed to fetch queue status", err);
       }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(interval);
   }, []);
 
@@ -122,40 +151,85 @@ export default function CampaignsPage({
     }
   }
 
-  // -------------------------------
-  // Send campaign in small batches
-  // -------------------------------
+  // Fixed send function
   async function handleSend(campaignId: number) {
-    setSendingCampaignId(campaignId);
-    let sentTotal = 0;
+    if (sendingCampaigns[campaignId]) return;
 
-    while (true) {
-      const res = await fetch("/api/worker/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+    setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
+    setShowQueuePopup(campaignId);
+
+    try {
+      // Step 1: Queue the emails
+      const queueRes = await fetch('/api/campaigns/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId }),
       });
-      const json = await res.json();
-
-      if (!res.ok) {
-        addToast?.("Error processing batch: " + (json.error || ""), "error");
-        break;
+      
+      const queueResult = await queueRes.json();
+      
+      if (!queueRes.ok) {
+        throw new Error(queueResult.error || 'Failed to queue emails');
       }
 
-      sentTotal += json.sent || 0;
+      addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
 
-      // Update queueStatus for this campaign immediately
-      const statusRes = await fetch("/api/queue/status");
-      const statusJson = await statusRes.json();
-      setQueueStatus((prev) => ({ ...prev, [campaignId]: statusJson[campaignId] }));
+      // Step 2: Process the queue in batches
+      let totalSent = 0;
+      let isComplete = false;
 
-      if (json.sent === 0) break; // queue empty
+      const processQueue = async () => {
+        try {
+          const workerRes = await fetch('/api/queue/worker', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ campaignId, batchSize: 5 }), // Process 5 at a time
+          });
+          
+          const workerResult = await workerRes.json();
+          
+          if (workerRes.ok) {
+            totalSent += workerResult.sent || 0;
+            isComplete = workerResult.completed || false;
+
+            if (workerResult.sent > 0) {
+              console.log(`Sent ${workerResult.sent} emails, total: ${totalSent}`);
+            }
+
+            // Continue processing if not complete and there are still emails to send
+            if (!isComplete && workerResult.sent > 0) {
+              setTimeout(processQueue, 2000); // Wait 2 seconds between batches
+            } else if (isComplete) {
+              addToast?.(`Campaign completed! Sent ${totalSent} emails total`, 'success');
+              await fetchCampaigns(); // Refresh campaign status
+              setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+            } else {
+              // No more emails to send
+              setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+            }
+          }
+        } catch (err) {
+          console.error('Queue processing error:', err);
+          setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+        }
+      };
+
+      // Start processing the queue
+      setTimeout(processQueue, 1000); // Give queue a moment to populate
+
+    } catch (err) {
+      console.error('Send campaign error:', err);
+      addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
+      setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
     }
-
-    addToast?.(`All emails sent: ${sentTotal}`, "success");
-    setSendingCampaignId(null);
-    fetchCampaigns(); // refresh campaign list
   }
+
+  const handleClosePopup = () => {
+    setShowQueuePopup(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('showQueuePopup');
+    }
+  };
 
   return (
     <div className="space-y-6 lg:space-y-8">
@@ -234,6 +308,8 @@ export default function CampaignsPage({
         <div className="divide-y divide-gray-100">
           {campaigns.map((c) => {
             const cQueue = queueStatus[c.id] || { waiting: 0, active: 0, completed: 0, failed: 0 };
+            const isCurrentlySending = sendingCampaigns[c.id];
+            
             return (
               <div
                 key={c.id}
@@ -245,18 +321,25 @@ export default function CampaignsPage({
                     <p>Subject: {c.subject}</p>
                     <p>Template: {c.template?.name || "None"}</p>
                     <p>Subscribers: {c.subscribers?.length || 0}</p>
-                    <p className={`font-medium ${c.status === "sent" ? "text-green-600" : "text-gray-500"}`}>
+                    <p className={`font-medium ${
+                      c.status === "sent" ? "text-green-600" : 
+                      c.status === "sending" ? "text-orange-600" :
+                      "text-gray-500"
+                    }`}>
                       Status: {c.status}
+                      {isCurrentlySending && " (Processing...)"}
                     </p>
-                    <div className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-2">
-                      <div className="font-medium mb-1">Queue Status:</div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <span>Waiting: {cQueue.waiting}</span>
-                        <span>Active: {cQueue.active}</span>
-                        <span>Completed: {cQueue.completed}</span>
-                        <span>Failed: {cQueue.failed}</span>
+                    {(cQueue.waiting > 0 || cQueue.active > 0 || cQueue.completed > 0 || cQueue.failed > 0) && (
+                      <div className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-2">
+                        <div className="font-medium mb-1">Queue Status:</div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <span>Waiting: {cQueue.waiting}</span>
+                          <span>Active: {cQueue.active}</span>
+                          <span>Completed: {cQueue.completed}</span>
+                          <span>Failed: {cQueue.failed}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
@@ -264,19 +347,42 @@ export default function CampaignsPage({
                   {c.status !== "sent" && (
                     <button
                       onClick={() => handleSend(c.id)}
-                      className="px-3 lg:px-4 py-2 bg-purple-600 text-white rounded-xl text-sm lg:text-base whitespace-nowrap"
+                      disabled={isCurrentlySending}
+                      className={`px-3 lg:px-4 py-2 rounded-xl text-sm lg:text-base whitespace-nowrap transition-colors ${
+                        isCurrentlySending 
+                          ? 'bg-gray-400 text-white cursor-not-allowed'
+                          : 'bg-purple-600 hover:bg-purple-700 text-white'
+                      }`}
                     >
-                      Send Now
+                      {isCurrentlySending ? "Sending..." : "Send Now"}
+                    </button>
+                  )}
+                  
+                  {/* Show queue progress button */}
+                  {(cQueue.waiting > 0 || cQueue.active > 0 || cQueue.completed > 0 || cQueue.failed > 0) && (
+                    <button
+                      onClick={() => setShowQueuePopup(c.id)}
+                      className="px-3 lg:px-4 py-2 border border-purple-600 text-purple-600 hover:bg-purple-50 rounded-xl text-sm lg:text-base whitespace-nowrap"
+                    >
+                      View Progress
                     </button>
                   )}
                 </div>
-
-                {sendingCampaignId === c.id && <QueuePopup queueCounts={cQueue} />}
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Queue Progress Popup */}
+      {showQueuePopup !== null && (
+        <QueuePopup
+          queueCounts={queueStatus[showQueuePopup] || { waiting: 0, active: 0, completed: 0, failed: 0 }}
+          campaignName={campaigns.find(c => c.id === showQueuePopup)?.name || "Campaign"}
+          onClose={handleClosePopup}
+          totalEmails={campaigns.find(c => c.id === showQueuePopup)?.subscribers?.length || 0}
+        />
+      )}
     </div>
   );
 }
