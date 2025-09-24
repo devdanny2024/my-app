@@ -1,14 +1,8 @@
-// src/pages/api/campaigns/send.ts - Corrected
+// src/pages/api/campaigns/send.ts
+
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { Queue } from 'bullmq';
+import { mailQueue } from '../../../lib/queue'; // <-- CORRECT: Import the shared queue
 import { supabase } from '../../../lib/supabase';
-
-const connection = {
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-};
-
-const mailQueue = new Queue('mail-queue', { connection });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
@@ -21,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
-      .select('*, template:templates(*)')
+      .select('*')
       .eq('id', campaignId)
       .single();
 
@@ -29,55 +23,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    // FIX 1 & 2: Remove the generic from rpc() and cast the resulting data instead.
-    const { data } = await supabase
-      .rpc('get_table_columns', { table_name: 'campaign_subscribers' })
-      .single();
-    const tableInfo = data as { columns: string[] } | null;
-    const hasSentColumn = tableInfo?.columns?.includes('sent');
-    
-    console.log('Table has sent column:', hasSentColumn);
-
-    let query = supabase
+    const { data: campaignSubscribers, error: subsError } = await supabase
       .from('campaign_subscribers')
       .select(`
         subscriber_id,
         sent,
         subscribers!inner(email, name)
       `)
-      .eq('campaign_id', campaignId);
-
-    if (hasSentColumn) {
-      query = query.eq('sent', false);
-    }
-
-    let { data: campaignSubscribers, error: subsError } = await query;
+      .eq('campaign_id', campaignId)
+      .eq('sent', false);
 
     if (subsError) {
       console.error('Error fetching subscribers:', subsError);
-      
-      console.log('Trying fallback query without sent filter...');
-      const { data: fallbackSubs, error: fallbackError } = await supabase
-        .from('campaign_subscribers')
-        .select(`
-          subscriber_id,
-          subscribers!inner(email, name)
-        `)
-        .eq('campaign_id', campaignId);
-      
-      if (fallbackError) {
-        return res.status(500).json({ error: 'Failed to fetch subscribers', details: fallbackError });
-      }
-      
-      // FIX 3: Add the missing 'sent' property to the fallback data to match the expected type.
-      if (fallbackSubs) {
-        campaignSubscribers = fallbackSubs.map(sub => ({
-          ...sub,
-          sent: false, // Add default 'sent' property
-        }));
-      }
+      return res.status(500).json({ error: 'Failed to fetch subscribers' });
     }
-
+    
     if (!campaignSubscribers || campaignSubscribers.length === 0) {
       return res.status(200).json({ 
         sent: 0, 
@@ -87,15 +47,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log(`Found ${campaignSubscribers.length} subscribers to send to`);
 
-    const jobs = [];
-    for (const sub of campaignSubscribers) {
+    const jobs = campaignSubscribers.map(sub => {
       const subscriber = (sub as any).subscribers;
-      if (!subscriber?.email) {
-        console.log('Skipping subscriber - no email:', sub);
-        continue;
-      }
-      
-      jobs.push({
+      return {
         name: `email-${campaignId}-${subscriber.email}`,
         data: {
           campaignId: campaignId,
@@ -105,17 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           html: campaign.body,
           subscriberName: subscriber.name || 'Subscriber'
         }
-      });
-    }
+      };
+    });
 
-    if (jobs.length === 0) {
-      return res.status(200).json({ 
-        sent: 0, 
-        message: 'No valid email addresses found',
-        debug: { subscribersFound: campaignSubscribers.length }
-      });
-    }
-
+    // Use the imported mailQueue
     const addedJobs = await mailQueue.addBulk(jobs);
 
     await supabase
@@ -123,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .update({ status: 'sending' })
       .eq('id', campaignId);
 
-    console.log(`Successfully queued ${jobs.length} emails for campaign ${campaignId}`);
+    console.log(`Successfully queued ${addedJobs.length} emails for campaign ${campaignId}`);
     
     return res.status(200).json({ 
       success: true, 
@@ -134,8 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err) {
     console.error('Send campaign error:', err);
     return res.status(500).json({ 
-      error: (err as Error).message,
-      stack: (err as Error).stack 
+      error: (err as Error).message
     });
   }
 }
