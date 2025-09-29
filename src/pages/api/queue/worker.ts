@@ -1,7 +1,6 @@
-// src/pages/api/queue/worker.ts
-
+// Corrected version of src/pages/api/queue/worker.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { mailQueue } from '../../../lib/queue'; // <-- CORRECT: Import the shared queue
+import { mailQueue } from '../../../lib/queue';
 import { sendMail } from '../../../lib/mailer';
 import { supabase } from '../../../lib/supabase';
 
@@ -44,12 +43,12 @@ export default async function handler(
           .eq('subscriber_id', subscriberId);
       }
 
-      await job.moveToCompleted('sent successfully', job.token!, false);
+      await job.remove();
       sentCount++;
 
     } catch (error) {
       console.error(`Job ${job.id} failed with error:`, error);
-      await job.moveToFailed(error as Error, job.token!);
+      // Let the job remain in the queue for a future retry.
     }
   }
 

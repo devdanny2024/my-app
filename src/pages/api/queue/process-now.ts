@@ -1,3 +1,4 @@
+// Corrected version of src/pages/api/queue/process-now.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { mailQueue } from '../../../lib/queue';
 import { sendMail } from '../../../lib/mailer';
@@ -33,7 +34,7 @@ export default async function handler(
 
         if (!email || !subject || !html) {
           console.warn(`Job ${job.id} missing required data`);
-          await job.moveToFailed(new Error('Missing required data'), job.token!);
+          // Instead of moving to failed, just log the error and don't remove the job for a retry
           failedCount++;
           continue;
         }
@@ -54,13 +55,13 @@ export default async function handler(
             .eq('subscriber_id', subscriberId);
         }
 
-        // Mark job as completed
-        await job.moveToCompleted('sent successfully', job.token!, false);
+        // Remove the job from the queue
+        await job.remove(); 
         sentCount++;
 
       } catch (error) {
         console.error(`Job ${job.id} failed:`, error);
-        await job.moveToFailed(error as Error, job.token!);
+        // Log the error but don't remove the job, so it can be retried by the next run
         failedCount++;
       }
     }
@@ -69,10 +70,13 @@ export default async function handler(
     const campaignIds = new Set(jobs.map(j => j.data.campaignId).filter(Boolean));
     
     for (const campaignId of campaignIds) {
-      const remainingJobs = await mailQueue.getJobs(['waiting', 'active']);
-      const campaignJobsRemaining = remainingJobs.filter(j => j.data.campaignId === campaignId);
-      
-      if (campaignJobsRemaining.length === 0) {
+      const { count: remainingCount } = await supabase
+        .from('campaign_subscribers')
+        .select('*', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('sent', false);
+
+      if (remainingCount === 0) {
         await supabase
           .from('campaigns')
           .update({ status: 'sent' })

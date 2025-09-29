@@ -119,16 +119,20 @@ function QueuePopup({ queueCounts, campaignName, onClose, totalEmails }: QueuePo
           </div>
         </div>
 
-        {/* Footer */}
+        {/* --- MODIFIED FOOTER --- */}
         <div className="flex justify-end gap-3 p-6 pt-4 border-t border-gray-200">
-          {isComplete && (
-            <button
-              onClick={onClose}
-              className="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-2 rounded-lg font-medium"
-            >
-              Close
-            </button>
-          )}
+          <button
+            onClick={onClose}
+            className={`
+              text-white px-6 py-2 rounded-lg font-medium transition-colors
+              ${isComplete 
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700 hover:opacity-90' 
+                : 'bg-gray-500 hover:bg-gray-600'
+              }
+            `}
+          >
+            {isComplete ? 'Close' : 'Hide'}
+          </button>
         </div>
       </div>
     </div>
