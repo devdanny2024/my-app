@@ -45,6 +45,10 @@ export default function CampaignsPage({
     return null;
   });
 
+  // --- NEW STATE TO PREVENT RE-OPENING ---
+  const [hasManuallyClosed, setHasManuallyClosed] = useState(false);
+
+
   // Save popup state to localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -56,14 +60,15 @@ export default function CampaignsPage({
     }
   }, [showQueuePopup]);
 
-  // Check if there are any active sending campaigns on mount
+  
+  // --- MODIFIED useEffect HOOK ---
   useEffect(() => {
     const activeCampaigns = Object.entries(queueStatus).filter(([campaignId, status]) => 
       status.waiting > 0 || status.active > 0
     );
     
-    // Auto-show popup for the first active campaign if none is currently shown
-    if (activeCampaigns.length > 0 && showQueuePopup === null) {
+    // Auto-show popup ONLY if it hasn't been manually closed
+    if (activeCampaigns.length > 0 && showQueuePopup === null && !hasManuallyClosed) {
       const firstActiveCampaignId = parseInt(activeCampaigns[0][0]);
       setShowQueuePopup(firstActiveCampaignId);
     }
@@ -75,10 +80,12 @@ export default function CampaignsPage({
         // Keep popup for 5 seconds after completion then auto-hide
         setTimeout(() => {
           setShowQueuePopup(null);
+          setHasManuallyClosed(false); // Reset for the next campaign
         }, 5000);
       }
     }
-  }, [queueStatus, showQueuePopup]);
+  }, [queueStatus, showQueuePopup, hasManuallyClosed]);
+
 
   // Fetch templates
   async function fetchTemplates() {
@@ -157,6 +164,7 @@ export default function CampaignsPage({
   async function handleSend(campaignId: number) {
     if (sendingCampaigns[campaignId]) return;
 
+    setHasManuallyClosed(false); // Reset manual close state for new send
     setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
     setShowQueuePopup(campaignId);
 
@@ -184,7 +192,7 @@ export default function CampaignsPage({
     }
   }
 
-  // NEW: Manual queue processing function
+  // Manual queue processing function
   async function handleProcessQueue() {
     if (isProcessing) return;
     
@@ -216,8 +224,10 @@ export default function CampaignsPage({
     }
   }
 
+  // --- MODIFIED CLOSE HANDLER ---
   const handleClosePopup = () => {
     setShowQueuePopup(null);
+    setHasManuallyClosed(true); // Set flag to true when user closes
     if (typeof window !== 'undefined') {
       localStorage.removeItem('showQueuePopup');
     }
