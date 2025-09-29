@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import QueuePopup from "../components/QueuePopup"; // Import the new popup
+import QueuePopup from "../components/QueuePopup";
+import { Zap, AlertCircle } from "lucide-react";
 
 type Template = { id: number; name: string; subject: string; body: string };
 
@@ -33,6 +34,8 @@ export default function CampaignsPage({
   const [templateId, setTemplateId] = useState<number | null>(null);
   const [queueStatus, setQueueStatus] = useState<Record<string, QueueCounts>>({});
   const [sendingCampaigns, setSendingCampaigns] = useState<Record<number, boolean>>({});
+  const [isProcessing, setIsProcessing] = useState(false);
+  
   // State persistence for popup across page refreshes
   const [showQueuePopup, setShowQueuePopup] = useState<number | null>(() => {
     if (typeof window !== 'undefined') {
@@ -107,7 +110,7 @@ export default function CampaignsPage({
       try {
         const res = await fetch("/api/queue/status");
         const json = await res.json();
-        setQueueStatus(json);
+        setQueueStatus(json.details || json);
       } catch (err) {
         console.error("Failed to fetch queue status", err);
       }
@@ -151,37 +154,67 @@ export default function CampaignsPage({
     }
   }
 
-// In your CampaignsPage component
+  async function handleSend(campaignId: number) {
+    if (sendingCampaigns[campaignId]) return;
 
-async function handleSend(campaignId: number) {
-  if (sendingCampaigns[campaignId]) return;
+    setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
+    setShowQueuePopup(campaignId);
 
-  setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
-  setShowQueuePopup(campaignId);
+    try {
+      const queueRes = await fetch('/api/campaigns/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId }),
+      });
 
-  try {
-    const queueRes = await fetch('/api/campaigns/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ campaignId }),
-    });
+      const queueResult = await queueRes.json();
+      
+      if (!queueRes.ok) {
+        throw new Error(queueResult.error || 'Failed to queue emails');
+      }
 
-    const queueResult = await queueRes.json();
-    
-    if (!queueRes.ok) {
-      throw new Error(queueResult.error || 'Failed to queue emails');
+      addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
+      await fetchCampaigns();
+
+    } catch (err) {
+      console.error('Send campaign error:', err);
+      addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
+      setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
+      setShowQueuePopup(null);
     }
-
-    addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
-    await fetchCampaigns(); // Refresh campaigns to show 'sending' status
-
-  } catch (err) {
-    console.error('Send campaign error:', err);
-    addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
-    setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
-    setShowQueuePopup(null);
   }
-}
+
+  // NEW: Manual queue processing function
+  async function handleProcessQueue() {
+    if (isProcessing) return;
+    
+    setIsProcessing(true);
+    addToast?.("Processing queue...", "info");
+
+    try {
+      const res = await fetch('/api/queue/process-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const result = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(result.error || 'Failed to process queue');
+      }
+
+      addToast?.(result.message || `Processed ${result.processed} emails`, 'success');
+      
+      // Refresh campaigns to update status
+      await fetchCampaigns();
+
+    } catch (err) {
+      console.error('Process queue error:', err);
+      addToast?.('Failed to process queue: ' + (err as Error).message, 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  }
 
   const handleClosePopup = () => {
     setShowQueuePopup(null);
@@ -190,15 +223,61 @@ async function handleSend(campaignId: number) {
     }
   };
 
+  // Calculate total stuck jobs
+  const totalStuckJobs = Object.values(queueStatus).reduce((sum, counts) => 
+    sum + counts.waiting + counts.active, 0
+  );
+
   return (
     <div className="space-y-6 lg:space-y-8">
-      {/* Header */}
+      {/* Header with Queue Processing Alert */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Campaigns</h1>
           <p className="text-gray-600 mt-1">Create, manage and send campaigns</p>
         </div>
+
+        {/* Manual Process Queue Button */}
+        {totalStuckJobs > 0 && (
+          <button
+            onClick={handleProcessQueue}
+            disabled={isProcessing}
+            className={`flex items-center gap-2 px-4 lg:px-6 py-2 lg:py-3 rounded-xl text-sm lg:text-base font-medium transition-colors ${
+              isProcessing
+                ? 'bg-gray-400 text-white cursor-not-allowed'
+                : 'bg-orange-600 hover:bg-orange-700 text-white shadow-lg'
+            }`}
+          >
+            {isProcessing ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Processing...
+              </>
+            ) : (
+              <>
+                <Zap className="w-5 h-5" />
+                Process {totalStuckJobs} Stuck Jobs
+              </>
+            )}
+          </button>
+        )}
       </div>
+
+      {/* Stuck Jobs Alert */}
+      {totalStuckJobs > 0 && (
+        <div className="bg-orange-50 border-l-4 border-orange-400 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-orange-800">Queue Processing Required</h3>
+              <p className="text-sm text-orange-700 mt-1">
+                You have {totalStuckJobs} email(s) waiting to be sent. Click "Process Stuck Jobs" to send them now.
+                For automatic processing, ensure your cron job is configured in Vercel.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* New Campaign Form */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
