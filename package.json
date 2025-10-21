@@ -5,7 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "build:worker": "tsc --project tsconfig.worker.json",
+    "worker:dev": "ts-node src/worker/vps-worker.ts",
+    "worker:start": "node dist/worker/vps-worker.js",
+    "worker:pm2": "pm2 start ecosystem.config.js",
+    "worker:docker": "docker-compose -f docker-compose.worker.yml up -d",
+    "deploy:worker": "bash scripts/deploy-worker.sh",
+    "monitor:worker": "bash scripts/monitor-workers.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",
