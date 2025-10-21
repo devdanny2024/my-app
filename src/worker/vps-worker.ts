@@ -12,30 +12,31 @@ const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 interface MailJobData {
-  to: string;
+  email: string;
   subject: string;
   html: string;
   subscriberId: number;
   campaignId: number;
+  subscriberName?: string;
 }
 
 // Create the worker
 const worker = new Worker(
   'mail-queue',
   async (job: Job<MailJobData>) => {
-    const { to, subject, html, subscriberId, campaignId } = job.data;
+    const { email, subject, html, subscriberId, campaignId } = job.data;
 
     try {
-      console.log(`[Worker ${process.pid}] Processing job ${job.id} - Sending email to ${to}`);
+      console.log(`[Worker ${process.pid}] Processing job ${job.id} - Sending email to ${email}`);
 
       // Send the email
       const info = await sendMail({
-        to,
+        to: email,
         subject,
         html,
       });
 
-      console.log(`[Worker ${process.pid}] Email sent to ${to}:`, info.messageId);
+      console.log(`[Worker ${process.pid}] Email sent to ${email}:`, info.messageId);
 
       // Update the database to mark this email as sent
       const { error } = await supabase
@@ -54,7 +55,7 @@ const worker = new Worker(
 
       return { success: true, messageId: info.messageId };
     } catch (error) {
-      console.error(`[Worker ${process.pid}] Failed to send email to ${to}:`, error);
+      console.error(`[Worker ${process.pid}] Failed to send email to ${email}:`, error);
       throw error; // BullMQ will handle retries
     }
   },
