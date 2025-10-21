@@ -1,11 +1,45 @@
-// src/pages/subscribers.tsx - Enhanced with list, search, and unsubscribe
+// src/pages/subscribers.tsx - Redesigned with shadcn/ui
 import React, { useState, useEffect } from "react";
 import * as Papa from "papaparse";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Upload, Search, Trash2, UserCheck } from "lucide-react";
 
 type CSVRow = { email: string; name?: string };
 type Subscriber = { id: number; email: string; name?: string; created_at: string };
 
-export default function SubscribersPage({ addToast }: { addToast?: (msg: string, type?: string) => void }) {
+export default function SubscribersPage() {
   const [preview, setPreview] = useState<CSVRow[]>([]);
   const [uploadedCount, setUploadedCount] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -14,12 +48,13 @@ export default function SubscribersPage({ addToast }: { addToast?: (msg: string,
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; subscriber?: Subscriber }>({ open: false });
   const CHUNK_SIZE = 100;
   const LIMIT = 50;
 
   useEffect(() => {
     fetchSubscribers();
-  }, [currentPage, searchQuery]);
+  }, [currentPage]);
 
   async function fetchSubscribers() {
     setIsLoading(true);
@@ -37,30 +72,34 @@ export default function SubscribersPage({ addToast }: { addToast?: (msg: string,
         setSubscribers(data.subscribers || []);
         setTotalCount(data.total || 0);
       } else {
-        addToast?.("Failed to fetch subscribers", "error");
+        toast.error("Failed to fetch subscribers");
       }
     } catch (err) {
       console.error("Fetch subscribers error:", err);
-      addToast?.("Error loading subscribers", "error");
+      toast.error("Error loading subscribers");
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function handleUnsubscribe(id: number, email: string) {
-    if (!confirm(`Remove ${email} from subscribers?`)) return;
+  async function handleUnsubscribe() {
+    if (!deleteDialog.subscriber) return;
+
+    const { id, email } = deleteDialog.subscriber;
 
     try {
       const res = await fetch(`/api/subscribers?id=${id}`, { method: "DELETE" });
       if (res.ok) {
-        addToast?.(`${email} removed successfully`, "success");
+        toast.success(`${email} removed successfully`);
         fetchSubscribers();
       } else {
-        addToast?.("Failed to remove subscriber", "error");
+        toast.error("Failed to remove subscriber");
       }
     } catch (err) {
       console.error("Delete error:", err);
-      addToast?.("Error removing subscriber", "error");
+      toast.error("Error removing subscriber");
+    } finally {
+      setDeleteDialog({ open: false });
     }
   }
 
@@ -84,10 +123,10 @@ export default function SubscribersPage({ addToast }: { addToast?: (msg: string,
         if (typeof window !== "undefined") localStorage.setItem("upload-progress", updated.toString());
         return updated;
       });
-      fetchSubscribers(); // Refresh list after upload
+      fetchSubscribers();
     } catch (err) {
       console.error("Upload chunk failed", err);
-      addToast?.("Upload failed for a chunk", "error");
+      toast.error("Upload failed for a chunk");
     }
   }
 
@@ -107,10 +146,10 @@ export default function SubscribersPage({ addToast }: { addToast?: (msg: string,
       },
       error: (error: any) => {
         console.error("CSV parse error:", error);
-        addToast?.("CSV parse error: " + (error?.message ?? String(error)), "error");
+        toast.error("CSV parse error: " + (error?.message ?? String(error)));
       }
     });
-    addToast?.("Started processing CSV", "info");
+    toast.info("Started processing CSV");
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -125,184 +164,253 @@ export default function SubscribersPage({ addToast }: { addToast?: (msg: string,
     if (typeof window !== "undefined") localStorage.removeItem("upload-progress");
     setUploadedCount(0);
     setPreview([]);
-    addToast?.("Upload progress has been reset.", "info");
+    toast.info("Upload progress has been reset");
   }
 
   const totalPages = Math.ceil(totalCount / LIMIT);
 
   return (
-    <div className="space-y-6 lg:space-y-8">
+    <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Subscribers</h1>
-          <p className="text-gray-600 mt-1">Manage your email subscriber list</p>
+          <h1 className="text-3xl font-bold tracking-tight">Subscribers</h1>
+          <p className="text-muted-foreground mt-1">Manage your email subscriber list</p>
         </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 text-center sm:text-left">
-          <div className="text-xl lg:text-2xl font-bold text-purple-600">{totalCount.toLocaleString()}</div>
-          <div className="text-sm text-gray-500">Total Subscribers</div>
-        </div>
+        <Card className="sm:w-auto">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <UserCheck className="h-8 w-8 text-purple-600" />
+              <div>
+                <div className="text-2xl font-bold text-purple-600">{totalCount.toLocaleString()}</div>
+                <p className="text-xs text-muted-foreground">Total Subscribers</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Subscribers List */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-4 lg:p-6 border-b border-gray-100">
+      <Card>
+        <CardHeader>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <h2 className="text-lg lg:text-xl font-semibold text-gray-900">All Subscribers</h2>
+            <div>
+              <CardTitle>All Subscribers</CardTitle>
+              <CardDescription>View and manage your subscriber list</CardDescription>
+            </div>
 
             {/* Search Form */}
             <form onSubmit={handleSearch} className="flex gap-2">
-              <input
+              <Input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by email or name..."
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+                className="w-64"
               />
-              <button
-                type="submit"
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm"
-              >
-                Search
-              </button>
+              <Button type="submit" size="icon">
+                <Search className="h-4 w-4" />
+              </Button>
             </form>
           </div>
-        </div>
-
-        {isLoading ? (
-          <div className="p-12 text-center text-gray-500">Loading subscribers...</div>
-        ) : subscribers.length === 0 ? (
-          <div className="p-12 text-center text-gray-500">
-            {searchQuery ? "No subscribers found matching your search." : "No subscribers yet. Upload a CSV to get started!"}
-          </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 lg:px-6 py-3 lg:py-4 text-left text-sm font-semibold text-gray-700">Email</th>
-                    <th className="px-4 lg:px-6 py-3 lg:py-4 text-left text-sm font-semibold text-gray-700">Name</th>
-                    <th className="px-4 lg:px-6 py-3 lg:py-4 text-left text-sm font-semibold text-gray-700">Subscribed</th>
-                    <th className="px-4 lg:px-6 py-3 lg:py-4 text-right text-sm font-semibold text-gray-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {subscribers.map((sub) => (
-                    <tr key={sub.id} className="hover:bg-gray-50">
-                      <td className="px-4 lg:px-6 py-3 lg:py-4 text-sm text-gray-900 break-all">{sub.email}</td>
-                      <td className="px-4 lg:px-6 py-3 lg:py-4 text-sm text-gray-900">{sub.name || "-"}</td>
-                      <td className="px-4 lg:px-6 py-3 lg:py-4 text-sm text-gray-600">
-                        {new Date(sub.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 lg:px-6 py-3 lg:py-4 text-right">
-                        <button
-                          onClick={() => handleUnsubscribe(sub.id, sub.email)}
-                          className="text-red-600 hover:text-red-800 text-sm font-medium"
-                        >
-                          Unsubscribe
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="py-12 text-center text-muted-foreground">
+              Loading subscribers...
             </div>
+          ) : subscribers.length === 0 ? (
+            <div className="py-12 text-center text-muted-foreground">
+              {searchQuery ? "No subscribers found matching your search." : "No subscribers yet. Upload a CSV to get started!"}
+            </div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Subscribed</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {subscribers.map((sub) => (
+                    <TableRow key={sub.id}>
+                      <TableCell className="font-medium">{sub.email}</TableCell>
+                      <TableCell>{sub.name || "-"}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">
+                          {new Date(sub.created_at).toLocaleDateString()}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDeleteDialog({ open: true, subscriber: sub })}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Unsubscribe
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="p-4 lg:p-6 border-t border-gray-100 flex items-center justify-between">
-                <div className="text-sm text-gray-600">
-                  Page {currentPage} of {totalPages} ({totalCount} total)
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="mt-4">
+                  <Separator className="my-4" />
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">
+                      Page {currentPage} of {totalPages} ({totalCount} total)
+                    </p>
+                    <Pagination>
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                          />
+                        </PaginationItem>
+
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          const page = i + 1;
+                          return (
+                            <PaginationItem key={page}>
+                              <PaginationLink
+                                onClick={() => setCurrentPage(page)}
+                                isActive={currentPage === page}
+                                className="cursor-pointer"
+                              >
+                                {page}
+                              </PaginationLink>
+                            </PaginationItem>
+                          );
+                        })}
+
+                        {totalPages > 5 && (
+                          <PaginationItem>
+                            <PaginationEllipsis />
+                          </PaginationItem>
+                        )}
+
+                        <PaginationItem>
+                          <PaginationNext
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Upload Section */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-4 lg:p-6 border-b border-gray-100">
-          <h2 className="text-lg lg:text-xl font-semibold text-gray-900 flex items-center gap-2">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5" />
             Upload Subscribers
-          </h2>
-        </div>
-
-        <div className="p-4 lg:p-6">
+          </CardTitle>
+          <CardDescription>Import subscribers from a CSV file</CardDescription>
+        </CardHeader>
+        <CardContent>
           <div
             onDrop={handleDrop}
             onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
             onDragLeave={() => setIsDragOver(false)}
-            className={`border-2 border-dashed rounded-xl p-8 lg:p-12 text-center transition-all duration-200 ${isDragOver ? "border-purple-400 bg-purple-50" : "border-gray-300 bg-gray-50 hover:bg-gray-100"}`}
+            className={`
+              border-2 border-dashed rounded-lg p-12 text-center transition-colors
+              ${isDragOver ? "border-purple-400 bg-purple-50" : "border-gray-300 hover:border-gray-400"}
+            `}
           >
-            <div className="mx-auto mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 lg:w-12 lg:h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-            </div>
-            <p className="text-base lg:text-lg font-medium text-gray-700 mb-2">Drag & drop your CSV file here</p>
-            <p className="text-gray-500 text-sm">Format: email, name (optional) • Chunked upload to server</p>
-            <div className="mt-4">
-              <label className="inline-block">
-                <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}/>
-                <span className="inline-block cursor-pointer mt-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-4 lg:px-6 py-2 rounded-lg text-sm lg:text-base">Choose File</span>
-              </label>
-            </div>
+            <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <p className="text-lg font-medium text-gray-700 mb-2">Drag & drop your CSV file here</p>
+            <p className="text-sm text-muted-foreground mb-4">Format: email, name (optional)</p>
+            <label>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+              />
+              <Button asChild>
+                <span>Choose File</span>
+              </Button>
+            </label>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Preview */}
       {preview.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-4 lg:p-6 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <h2 className="text-lg lg:text-xl font-semibold text-gray-900">Upload Preview</h2>
-            <button onClick={resetProgress} className="flex items-center justify-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm lg:text-base">
-              Reset Progress
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 lg:px-6 py-3 lg:py-4 text-left text-sm font-semibold text-gray-700">Email</th>
-                  <th className="px-4 lg:px-6 py-3 lg:py-4 text-left text-sm font-semibold text-gray-700">Name</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {preview.map((row, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 lg:px-6 py-3 lg:py-4 text-sm text-gray-900 break-all">{row.email}</td>
-                    <td className="px-4 lg:px-6 py-3 lg:py-4 text-sm text-gray-900">{row.name || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="p-4 lg:p-6 bg-green-50 border-t border-gray-100">
-            <div className="flex items-center gap-2 text-green-700">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-              <span className="font-medium text-sm lg:text-base">Successfully uploaded {uploadedCount.toLocaleString()} subscribers</span>
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Upload Preview</CardTitle>
+                <CardDescription>First 5 rows from your CSV</CardDescription>
+              </div>
+              <Button variant="destructive" onClick={resetProgress}>
+                Reset Progress
+              </Button>
             </div>
-          </div>
-        </div>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Name</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {preview.map((row, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-medium">{row.email}</TableCell>
+                    <TableCell>{row.name || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-green-700">
+                <UserCheck className="h-5 w-5" />
+                <span className="font-medium">Successfully uploaded {uploadedCount.toLocaleString()} subscribers</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog({ open })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove <strong>{deleteDialog.subscriber?.email}</strong> from your subscriber list.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleUnsubscribe} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Remove Subscriber
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
