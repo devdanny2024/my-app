@@ -1,5 +1,5 @@
 import { Worker, Job } from 'bullmq';
-import { sendMail } from '../lib/mailer';
+import { sendMailSmart } from '../lib/mailer-http';
 import { createClient } from '@supabase/supabase-js';
 
 // Environment variables
@@ -29,8 +29,8 @@ const worker = new Worker(
     try {
       console.log(`[Worker ${process.pid}] Processing job ${job.id} - Sending email to ${email}`);
 
-      // Send the email
-      const info = await sendMail({
+      // Send the email using smart mailer (HTTP-based if configured, SMTP as fallback)
+      const info = await sendMailSmart({
         to: email,
         subject,
         html,
