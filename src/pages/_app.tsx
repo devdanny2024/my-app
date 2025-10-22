@@ -9,7 +9,7 @@ export default function MyApp({ Component, pageProps }: AppProps & { Component: 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-slate-50 to-purple-50">
+    <div className="flex min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800">
       <Sidebar
         isMobileMenuOpen={isMobileMenuOpen}
         setIsMobileMenuOpen={setIsMobileMenuOpen}

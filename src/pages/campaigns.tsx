@@ -1,6 +1,20 @@
+// src/pages/campaigns.tsx - Modern Black Glossy Design
 import React, { useEffect, useState } from "react";
-import QueuePopup from "../components/QueuePopup";
-import { Zap, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Zap, AlertCircle, Send, Trash2, Eye, Mail, CheckCircle2 } from "lucide-react";
 
 type Template = { id: number; name: string; subject: string; body: string };
 
@@ -21,11 +35,7 @@ type QueueCounts = {
   failed: number;
 };
 
-export default function CampaignsPage({
-  addToast,
-}: {
-  addToast?: (msg: string, type?: string) => void;
-}) {
+export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [name, setName] = useState("");
@@ -35,57 +45,7 @@ export default function CampaignsPage({
   const [queueStatus, setQueueStatus] = useState<Record<string, QueueCounts>>({});
   const [sendingCampaigns, setSendingCampaigns] = useState<Record<number, boolean>>({});
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // State persistence for popup across page refreshes
-  const [showQueuePopup, setShowQueuePopup] = useState<number | null>(() => {
-    if (typeof window !== 'undefined') {
-      const savedPopup = localStorage.getItem('showQueuePopup');
-      return savedPopup ? parseInt(savedPopup) : null;
-    }
-    return null;
-  });
-
-  // --- NEW STATE TO PREVENT RE-OPENING ---
-  const [hasManuallyClosed, setHasManuallyClosed] = useState(false);
-
-
-  // Save popup state to localStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (showQueuePopup !== null) {
-        localStorage.setItem('showQueuePopup', showQueuePopup.toString());
-      } else {
-        localStorage.removeItem('showQueuePopup');
-      }
-    }
-  }, [showQueuePopup]);
-
-  
-  // --- MODIFIED useEffect HOOK ---
-  useEffect(() => {
-    const activeCampaigns = Object.entries(queueStatus).filter(([campaignId, status]) => 
-      status.waiting > 0 || status.active > 0
-    );
-    
-    // Auto-show popup ONLY if it hasn't been manually closed
-    if (activeCampaigns.length > 0 && showQueuePopup === null && !hasManuallyClosed) {
-      const firstActiveCampaignId = parseInt(activeCampaigns[0][0]);
-      setShowQueuePopup(firstActiveCampaignId);
-    }
-    
-    // Hide popup if the campaign is complete
-    if (showQueuePopup !== null) {
-      const currentStatus = queueStatus[showQueuePopup];
-      if (currentStatus && currentStatus.waiting === 0 && currentStatus.active === 0) {
-        // Keep popup for 5 seconds after completion then auto-hide
-        setTimeout(() => {
-          setShowQueuePopup(null);
-          setHasManuallyClosed(false); // Reset for the next campaign
-        }, 5000);
-      }
-    }
-  }, [queueStatus, showQueuePopup, hasManuallyClosed]);
-
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; campaign?: Campaign }>({ open: false });
 
   // Fetch templates
   async function fetchTemplates() {
@@ -95,7 +55,7 @@ export default function CampaignsPage({
       setTemplates(json || []);
     } catch (err) {
       console.error("Failed to fetch templates", err);
-      addToast?.("Failed to fetch templates", "error");
+      toast.error("Failed to fetch templates");
     }
   }
 
@@ -107,11 +67,11 @@ export default function CampaignsPage({
       setCampaigns(data || []);
     } catch (err) {
       console.error(err);
-      addToast?.("Failed to fetch campaigns", "error");
+      toast.error("Failed to fetch campaigns");
     }
   }
 
-  // Poll queue status every 3 seconds
+  // Poll queue status
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -154,19 +114,17 @@ export default function CampaignsPage({
       setSubject("");
       setBody("");
       setTemplateId(null);
-      addToast?.("Campaign created", "success");
+      toast.success("Campaign created successfully");
     } catch (err) {
       console.error(err);
-      addToast?.("Failed to create campaign", "error");
+      toast.error("Failed to create campaign");
     }
   }
 
   async function handleSend(campaignId: number) {
     if (sendingCampaigns[campaignId]) return;
 
-    setHasManuallyClosed(false); // Reset manual close state for new send
     setSendingCampaigns(prev => ({ ...prev, [campaignId]: true }));
-    setShowQueuePopup(campaignId);
 
     try {
       const queueRes = await fetch('/api/campaigns/send', {
@@ -176,28 +134,46 @@ export default function CampaignsPage({
       });
 
       const queueResult = await queueRes.json();
-      
+
       if (!queueRes.ok) {
         throw new Error(queueResult.error || 'Failed to queue emails');
       }
 
-      addToast?.(queueResult.message || `Queued ${queueResult.queued} emails`, 'success');
+      toast.success(queueResult.message || `Queued ${queueResult.queued} emails`);
       await fetchCampaigns();
 
     } catch (err) {
       console.error('Send campaign error:', err);
-      addToast?.('Failed to send campaign: ' + (err as Error).message, 'error');
+      toast.error('Failed to send campaign: ' + (err as Error).message);
       setSendingCampaigns(prev => ({ ...prev, [campaignId]: false }));
-      setShowQueuePopup(null);
     }
   }
 
-  // Manual queue processing function
+  async function handleDeleteCampaign() {
+    if (!deleteDialog.campaign) return;
+
+    try {
+      const res = await fetch(`/api/campaigns/${deleteDialog.campaign.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) throw new Error('Failed to delete campaign');
+
+      toast.success(`Campaign "${deleteDialog.campaign.name}" deleted`);
+      await fetchCampaigns();
+    } catch (err) {
+      console.error('Delete error:', err);
+      toast.error('Failed to delete campaign');
+    } finally {
+      setDeleteDialog({ open: false });
+    }
+  }
+
   async function handleProcessQueue() {
     if (isProcessing) return;
-    
+
     setIsProcessing(true);
-    addToast?.("Processing queue...", "info");
+    toast.info("Processing queue...");
 
     try {
       const res = await fetch('/api/queue/process-now', {
@@ -206,231 +182,292 @@ export default function CampaignsPage({
       });
 
       const result = await res.json();
-      
+
       if (!res.ok) {
         throw new Error(result.error || 'Failed to process queue');
       }
 
-      addToast?.(result.message || `Processed ${result.processed} emails`, 'success');
-      
-      // Refresh campaigns to update status
+      toast.success(result.message || `Processed ${result.processed} emails`);
       await fetchCampaigns();
 
     } catch (err) {
       console.error('Process queue error:', err);
-      addToast?.('Failed to process queue: ' + (err as Error).message, 'error');
+      toast.error('Failed to process queue: ' + (err as Error).message);
     } finally {
       setIsProcessing(false);
     }
   }
 
-  // --- MODIFIED CLOSE HANDLER ---
-  const handleClosePopup = () => {
-    setShowQueuePopup(null);
-    setHasManuallyClosed(true); // Set flag to true when user closes
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('showQueuePopup');
+  async function clearStuckJobs() {
+    try {
+      const res = await fetch('/api/queue/clear-failed', { method: 'POST' });
+      if (res.ok) {
+        toast.success('Cleared all stuck jobs');
+      }
+    } catch (err) {
+      toast.error('Failed to clear stuck jobs');
     }
-  };
+  }
 
-  // Calculate total stuck jobs
-  const totalStuckJobs = Object.values(queueStatus).reduce((sum, counts) => 
+  const totalStuckJobs = Object.values(queueStatus).reduce((sum, counts) =>
     sum + counts.waiting + counts.active, 0
   );
 
   return (
-    <div className="space-y-6 lg:space-y-8">
-      {/* Header with Queue Processing Alert */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-6">
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Campaigns</h1>
-          <p className="text-gray-600 mt-1">Create, manage and send campaigns</p>
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent mb-2">
+            Campaigns
+          </h1>
+          <p className="text-gray-400">Create, manage and send email campaigns</p>
         </div>
 
-        {/* Manual Process Queue Button */}
         {totalStuckJobs > 0 && (
-          <button
-            onClick={handleProcessQueue}
-            disabled={isProcessing}
-            className={`flex items-center gap-2 px-4 lg:px-6 py-2 lg:py-3 rounded-xl text-sm lg:text-base font-medium transition-colors ${
-              isProcessing
-                ? 'bg-gray-400 text-white cursor-not-allowed'
-                : 'bg-orange-600 hover:bg-orange-700 text-white shadow-lg'
-            }`}
-          >
-            {isProcessing ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                Processing...
-              </>
-            ) : (
-              <>
-                <Zap className="w-5 h-5" />
-                Process {totalStuckJobs} Stuck Jobs
-              </>
-            )}
-          </button>
+          <div className="flex gap-2">
+            <Button
+              onClick={clearStuckJobs}
+              variant="ghost"
+              className="bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700"
+            >
+              Clear Stuck
+            </Button>
+            <Button
+              onClick={handleProcessQueue}
+              disabled={isProcessing}
+              className="bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 border-0 shadow-lg shadow-orange-500/50"
+            >
+              {isProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Zap className="w-5 h-5 mr-2" />
+                  Process {totalStuckJobs} Jobs
+                </>
+              )}
+            </Button>
+          </div>
         )}
       </div>
 
       {/* Stuck Jobs Alert */}
       {totalStuckJobs > 0 && (
-        <div className="bg-orange-50 border-l-4 border-orange-400 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold text-orange-800">Queue Processing Required</h3>
-              <p className="text-sm text-orange-700 mt-1">
-                You have {totalStuckJobs} email(s) waiting to be sent. Click "Process Stuck Jobs" to send them now.
-                For automatic processing, ensure your cron job is configured in Vercel.
-              </p>
+        <div className="relative group">
+          <div className="absolute -inset-0.5 bg-gradient-to-r from-orange-600 to-red-600 rounded-2xl blur opacity-20"></div>
+          <div className="relative bg-orange-500/10 border border-orange-500/30 rounded-2xl p-4 backdrop-blur-xl">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-orange-300">Queue Processing Required</h3>
+                <p className="text-sm text-orange-200/80 mt-1">
+                  You have {totalStuckJobs} email(s) waiting. VPS workers should process these automatically.
+                  Click "Process Jobs" if needed.
+                </p>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* New Campaign Form */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-4 lg:p-6 border-b border-gray-100">
-          <h2 className="text-lg lg:text-xl font-semibold text-gray-900">Create Campaign</h2>
-        </div>
-        <form onSubmit={handleSubmit} className="p-4 lg:p-6 space-y-4 lg:space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Campaign Name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              className="w-full px-3 lg:px-4 py-2 lg:py-3 border border-gray-200 rounded-xl text-sm lg:text-base"
-            />
+      {/* Create Campaign Form */}
+      <div className="relative group">
+        <div className="absolute -inset-0.5 bg-gradient-to-r from-green-600 to-emerald-600 rounded-3xl blur opacity-20 group-hover:opacity-30 transition"></div>
+        <div className="relative bg-black/40 backdrop-blur-xl border border-gray-800 rounded-3xl overflow-hidden">
+          <div className="p-6 border-b border-gray-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-gradient-to-br from-green-500/20 to-emerald-500/20 rounded-lg">
+                <Mail className="h-6 w-6 text-green-400" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-white">Create Campaign</h2>
+                <p className="text-gray-400 text-sm">Set up a new email campaign</p>
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Template</label>
-            <select
-              value={templateId || ""}
-              onChange={(e) => handleTemplateChange(e.target.value)}
-              className="w-full px-3 lg:px-4 py-2 lg:py-3 border border-gray-200 rounded-xl text-sm lg:text-base"
-            >
-              <option value="">-- None --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Subject</label>
-            <input
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              required
-              className="w-full px-3 lg:px-4 py-2 lg:py-3 border border-gray-200 rounded-xl text-sm lg:text-base"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Body</label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              required
-              className="w-full px-3 lg:px-4 py-2 lg:py-3 border border-gray-200 rounded-xl h-32 lg:h-40 font-mono text-xs lg:text-sm resize-none"
-            />
-          </div>
-          <div>
-            <button
+
+          <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Campaign Name</label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  className="bg-gray-900/50 border-gray-700 text-white placeholder:text-gray-500 focus:border-green-500"
+                  placeholder="Enter campaign name"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Template (Optional)</label>
+                <select
+                  value={templateId || ""}
+                  onChange={(e) => handleTemplateChange(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700 text-white rounded-lg focus:border-green-500 focus:outline-none"
+                >
+                  <option value="">-- None --</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Email Subject</label>
+              <Input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                required
+                className="bg-gray-900/50 border-gray-700 text-white placeholder:text-gray-500 focus:border-green-500"
+                placeholder="Enter email subject"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Email Body (HTML)</label>
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                required
+                className="w-full px-4 py-3 bg-gray-900/50 border border-gray-700 text-white placeholder:text-gray-500 rounded-lg h-40 font-mono text-sm resize-none focus:border-green-500 focus:outline-none"
+                placeholder="Enter HTML email content"
+              />
+            </div>
+
+            <Button
               type="submit"
-              className="w-full sm:w-auto bg-gradient-to-r from-purple-600 to-purple-700 text-white px-4 lg:px-6 py-2 lg:py-3 rounded-xl text-sm lg:text-base"
+              className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 border-0 shadow-lg shadow-green-500/50"
             >
+              <Mail className="w-4 h-4 mr-2" />
               Create Campaign
-            </button>
-          </div>
-        </form>
+            </Button>
+          </form>
+        </div>
       </div>
 
-      {/* Existing Campaigns */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-4 lg:p-6 border-b border-gray-100">
-          <h2 className="text-lg lg:text-xl font-semibold text-gray-900">All Campaigns</h2>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {campaigns.map((c) => {
-            const cQueue = queueStatus[c.id] || { waiting: 0, active: 0, completed: 0, failed: 0 };
-            const isCurrentlySending = sendingCampaigns[c.id];
-            
-            return (
-              <div
-                key={c.id}
-                className="p-4 lg:p-6 hover:bg-gray-50 flex flex-col gap-4 lg:flex-row lg:justify-between lg:items-center"
-              >
-                <div className="flex-1">
-                  <h3 className="text-base lg:text-lg font-semibold text-gray-900 mb-2">{c.name}</h3>
-                  <div className="space-y-1 text-xs lg:text-sm text-gray-600">
-                    <p>Subject: {c.subject}</p>
-                    <p>Template: {c.template?.name || "None"}</p>
-                    <p>Subscribers: {c.subscribers?.length || 0}</p>
-                    <p className={`font-medium ${
-                      c.status === "sent" ? "text-green-600" : 
-                      c.status === "sending" ? "text-orange-600" :
-                      "text-gray-500"
-                    }`}>
-                      Status: {c.status}
-                      {isCurrentlySending && " (Processing...)"}
-                    </p>
-                    {(cQueue.waiting > 0 || cQueue.active > 0 || cQueue.completed > 0 || cQueue.failed > 0) && (
-                      <div className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-2">
-                        <div className="font-medium mb-1">Queue Status:</div>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <span>Waiting: {cQueue.waiting}</span>
-                          <span>Active: {cQueue.active}</span>
-                          <span>Completed: {cQueue.completed}</span>
-                          <span>Failed: {cQueue.failed}</span>
+      {/* Campaign List */}
+      <div className="relative group">
+        <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-3xl blur opacity-20 group-hover:opacity-30 transition"></div>
+        <div className="relative bg-black/40 backdrop-blur-xl border border-gray-800 rounded-3xl overflow-hidden">
+          <div className="p-6 border-b border-gray-800">
+            <h2 className="text-2xl font-bold text-white">All Campaigns</h2>
+            <p className="text-gray-400 text-sm mt-1">Manage your email campaigns</p>
+          </div>
+
+          <div className="divide-y divide-gray-800">
+            {campaigns.length === 0 ? (
+              <div className="p-12 text-center text-gray-400">
+                No campaigns yet. Create your first one above!
+              </div>
+            ) : (
+              campaigns.map((c) => {
+                const cQueue = queueStatus[c.id] || { waiting: 0, active: 0, completed: 0, failed: 0 };
+                const isCurrentlySending = sendingCampaigns[c.id];
+
+                return (
+                  <div
+                    key={c.id}
+                    className="p-6 hover:bg-white/5 transition-colors"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                      <div className="flex-1">
+                        <h3 className="text-xl font-semibold text-white mb-2">{c.name}</h3>
+                        <div className="space-y-1 text-sm text-gray-400">
+                          <p>Subject: <span className="text-gray-300">{c.subject}</span></p>
+                          <p>Template: <span className="text-gray-300">{c.template?.name || "None"}</span></p>
+                          <p>Subscribers: <span className="text-gray-300">{c.subscribers?.length || 0}</span></p>
+                          <div className="flex items-center gap-2 mt-2">
+                            <span>Status:</span>
+                            <Badge
+                              variant="secondary"
+                              className={`${
+                                c.status === "sent" ? "bg-green-500/20 text-green-300" :
+                                c.status === "sending" ? "bg-orange-500/20 text-orange-300" :
+                                "bg-gray-500/20 text-gray-300"
+                              } border-0`}
+                            >
+                              {c.status === "sent" && <CheckCircle2 className="w-3 h-3 mr-1" />}
+                              {c.status}
+                              {isCurrentlySending && " (Processing...)"}
+                            </Badge>
+                          </div>
+
+                          {(cQueue.waiting > 0 || cQueue.active > 0 || cQueue.completed > 0 || cQueue.failed > 0) && (
+                            <div className="mt-3 p-3 bg-gray-900/50 rounded-lg border border-gray-800">
+                              <div className="text-xs font-medium text-gray-300 mb-2">Queue Status:</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                                <span>Waiting: <span className="text-yellow-400">{cQueue.waiting}</span></span>
+                                <span>Active: <span className="text-blue-400">{cQueue.active}</span></span>
+                                <span>Completed: <span className="text-green-400">{cQueue.completed}</span></span>
+                                <span>Failed: <span className="text-red-400">{cQueue.failed}</span></span>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
-                    )}
-                  </div>
-                </div>
 
-                <div className="flex gap-2">
-                  {c.status !== "sent" && (
-                    <button
-                      onClick={() => handleSend(c.id)}
-                      disabled={isCurrentlySending}
-                      className={`px-3 lg:px-4 py-2 rounded-xl text-sm lg:text-base whitespace-nowrap transition-colors ${
-                        isCurrentlySending 
-                          ? 'bg-gray-400 text-white cursor-not-allowed'
-                          : 'bg-purple-600 hover:bg-purple-700 text-white'
-                      }`}
-                    >
-                      {isCurrentlySending ? "Sending..." : "Send Now"}
-                    </button>
-                  )}
-                  
-                  {/* Show queue progress button */}
-                  {(cQueue.waiting > 0 || cQueue.active > 0 || cQueue.completed > 0 || cQueue.failed > 0) && (
-                    <button
-                      onClick={() => setShowQueuePopup(c.id)}
-                      className="px-3 lg:px-4 py-2 border border-purple-600 text-purple-600 hover:bg-purple-50 rounded-xl text-sm lg:text-base whitespace-nowrap"
-                    >
-                      View Progress
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                      <div className="flex flex-wrap gap-2">
+                        {c.status !== "sent" && (
+                          <Button
+                            onClick={() => handleSend(c.id)}
+                            disabled={isCurrentlySending}
+                            className={`${
+                              isCurrentlySending
+                                ? 'bg-gray-600 cursor-not-allowed'
+                                : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 border-0 shadow-lg shadow-purple-500/50'
+                            }`}
+                          >
+                            <Send className="w-4 h-4 mr-2" />
+                            {isCurrentlySending ? "Sending..." : "Send Now"}
+                          </Button>
+                        )}
+
+                        <Button
+                          onClick={() => setDeleteDialog({ open: true, campaign: c })}
+                          variant="ghost"
+                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Queue Progress Popup */}
-      {showQueuePopup !== null && (
-        <QueuePopup
-          queueCounts={queueStatus[showQueuePopup] || { waiting: 0, active: 0, completed: 0, failed: 0 }}
-          campaignName={campaigns.find(c => c.id === showQueuePopup)?.name || "Campaign"}
-          onClose={handleClosePopup}
-          totalEmails={campaigns.find(c => c.id === showQueuePopup)?.subscribers?.length || 0}
-        />
-      )}
+      {/* Delete Dialog */}
+      <AlertDialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog({ open })}>
+        <AlertDialogContent className="bg-gray-900 border-gray-800">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Delete Campaign?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              This will permanently delete the campaign <strong className="text-white">"{deleteDialog.campaign?.name}"</strong> and all associated data.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-gray-800 text-white border-gray-700 hover:bg-gray-700">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteCampaign}
+              className="bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 border-0 shadow-lg shadow-red-500/50"
+            >
+              Delete Campaign
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
