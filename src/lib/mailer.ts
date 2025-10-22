@@ -7,13 +7,25 @@ type MailOptions = {
   text?: string;
 };
 
+const smtpPort = Number(process.env.SMTP_PORT || 587);
+const isSecure = smtpPort === 465;
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: true, // 465 for secure
+  port: smtpPort,
+  secure: isSecure, // true for 465, false for other ports
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
+  },
+  // Add timeout configurations
+  connectionTimeout: 30000, // 30 seconds
+  greetingTimeout: 10000,   // 10 seconds
+  socketTimeout: 30000,     // 30 seconds
+  // Enable TLS for non-secure ports
+  tls: {
+    rejectUnauthorized: false, // Allow self-signed certificates
+    ciphers: 'SSLv3',
   },
 });
 
